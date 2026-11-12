@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Виртуальные Modbus-приборы</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    font: 15px/1.4 system-ui, sans-serif;
+    background: #15181d; color: #e8eaed;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .hint { color: #8a919c; font-size: 13px; margin-bottom: 18px; }
+  /* плашка состояния шины */
+  .bus {
+    padding: 8px 12px; border-radius: 8px; margin-bottom: 16px;
+    font-size: 13px; font-variant-numeric: tabular-nums;
+  }
+  .bus.ok  { background: #14321d; border: 1px solid #2f6b40; color: #9fd8ab; }
+  .bus.err { background: #3a1d1d; border: 1px solid #7a3535; color: #f0a8a8; }
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+  .card {
+    background: #1e232b; border: 1px solid #2c333d;
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .card header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .card img, .placeholder {
+    width: 56px; height: 56px; border-radius: 10px;
+    background: #12151a; border: 1px solid #2c333d; flex: none;
+  }
+  .placeholder {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; color: #4a545f;
+  }
+  .card h2 { font-size: 16px; margin: 0; }
+  .addr { color: #8a919c; font-size: 12px; }
+  .reg { border-top: 1px solid #2a313a; padding: 10px 0 4px; }
+  .reg .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .reg label { font-size: 14px; }
+  .badge {
+    font-size: 11px; color: #8a919c; background: #12151a;
+    border-radius: 6px; padding: 2px 7px; white-space: nowrap;
+  }
+  .val { font-variant-numeric: tabular-nums; }
+  .raw { color: #8a919c; font-size: 12px; }
+  .who { font-size: 11px; color: #6b7480; }
+  /* раздел «среда» */
+  .env {
+    margin-top: 12px; border-top: 2px dashed #39424e; padding-top: 8px;
+  }
+  .env > .caption, .devside > .caption {
+    font-size: 11px; letter-spacing: 1px; color: #6b7480; margin: 6px 0 2px;
+  }
+  .env .reg { border-top: none; }
+  input[type=range] { width: 100%; accent-color: #ffb84d; margin: 8px 0 2px; }
+  /* шкала (read-only аналог) */
+  .bar {
+    height: 10px; border-radius: 5px; background: #12151a;
+    border: 1px solid #2c333d; overflow: hidden; margin: 8px 0 2px;
+  }
+  .bar > i { display: block; height: 100%; background: #4da3ff; transition: width .2s; }
+  /* лампочка */
+  .lamp {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #333a44; border: 2px solid #454f5c;
+    display: inline-block; vertical-align: middle;
+  }
+  .lamp.on { background: #ffd24d; border-color: #ffd24d; box-shadow: 0 0 10px #ffd24d88; }
+  /* тумблер (ручка среды) */
+  .toggle {
+    position: relative; width: 44px; height: 24px; border-radius: 12px;
+    background: #333a44; cursor: pointer; display: inline-block; vertical-align: middle;
+    transition: background .15s;
+  }
+  .toggle.on { background: #3f9e4d; }
+  .toggle::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%; background: #e8eaed;
+    transition: left .15s;
+  }
+  .toggle.on::after { left: 23px; }
+  /* битовое слово */
+  .bits { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 2px; }
+  .bititem { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #8a919c; }
+  .lamp.bit { width: 16px; height: 16px; }
+  .bitrow { padding: 3px 0; }
+</style>
+</head>
+<body>
+<h1>Виртуальные Modbus-приборы</h1>
+<div class="hint">Верх карточки — прибор: что он показывает на шину и что ему командует мастер.
+Низ — среда: ручки, которые крутите вы. «По шине» — сырые числа из кадров Modbus.</div>
+<div class="bus err" id="busbar">Шина: нет данных</div>
+<div class="grid" id="grid"></div>
+
+<script>
+const FC = { holding: "03/06/16", input: "04", coil: "01/05/15", discrete: "02" };
+const WHO = {
+  holding:  "уставка: задаёт мастер (ф. 06/16)",
+  input:    "датчик: мастер читает (ф. 04)",
+  coil:     "исполнительное: командует мастер (ф. 05/15)",
+  discrete: "датчик: мастер читает (ф. 02)"
+};
+const WHO_ENV = {
+  input:    "ручка среды: крутите вы",
+  discrete: "ручка среды: щёлкаете вы"
+};
+
+const grid = document.getElementById("grid");
+const editing = new Set();          // слайдеры, которые сейчас тянет пользователь
+const key = r => r.addr + ":" + r.type + ":" + r.num;
+
+async function refresh() {
+  let st;
+  try { st = await (await fetch("/api/state")).json(); }
+  catch { return; }                 // скрипт перезапущен — пробуем дальше
+  const bar = document.getElementById("busbar");
+  bar.className = "bus " + (st.bus.ok ? "ok" : "err");
+  bar.textContent = "Шина: " + st.bus.text;
+  for (const dev of st.devices) {
+    let card = document.getElementById("dev" + dev.addr);
+    if (!card) { card = createCard(dev); grid.appendChild(card); }
+    for (const r of dev.regs) updateReg({ ...r, addr: dev.addr });
+  }
+}
+
+function badge(r) {
+  return `<span class="badge">${r.type} #${r.num} · ф. ${FC[r.type]}</span>`;
+}
+
+function createCard(dev) {
+  const card = document.createElement("div");
+  card.className = "card"; card.id = "dev" + dev.addr;
+  const pic = dev.image
+    ? `<img src="${dev.image}" alt="">`
+    : `<div class="placeholder">${dev.name[0]}</div>`;
+  card.innerHTML = `<header>${pic}<div>
+      <h2>${dev.name}</h2><div class="addr">адрес на шине: ${dev.addr}</div>
+    </div></header>
+    <div class="devside"><div class="caption">ПРИБОР</div></div>
+    <div class="env"><div class="caption">СРЕДА (ВЫ)</div></div>`;
+
+  const devside = card.querySelector(".devside");
+  const envside = card.querySelector(".env");
+  let envCount = 0;
+
+  for (const r of dev.regs) {
+    const k = key({ addr: dev.addr, ...r });
+
+    // --- верх: что прибор показывает на шину (только смотрим) ---
+    const el = document.createElement("div");
+    el.className = "reg"; el.id = "reg-" + k;
+    if (r.widget === "slider") {
+      el.innerHTML = `<div class="row"><label>${r.label}</label>${badge(r)}</div>
+        <div class="bar"><i></i></div>
+        <div class="row"><span class="val"></span><span class="raw"></span></div>
+        <div class="who">${WHO[r.type]}</div>`;
+    } else if (r.widget === "bitfield") {
+      const dots = r.bits.map((b, i) =>
+        `<span class="bititem"><span class="lamp bit" data-bit="${i}"></span>${b}</span>`).join("");
+      el.innerHTML = `<div class="row"><label>${r.label}</label>${badge(r)}</div>
+        <div class="bits">${dots}</div>
+        <div class="row"><span class="raw"></span><span></span></div>
+        <div class="who">${WHO[r.type]}</div>`;
+    } else {
+      el.innerHTML = `<div class="row"><label>${r.label}</label>${badge(r)}</div>
+        <div class="row"><span class="lamp"></span><span class="raw"></span></div>
+        <div class="who">${WHO[r.type]}</div>`;
+    }
+    devside.appendChild(el);
+
+    // --- низ: ручка среды для измеряемых величин ---
+    if (r.type === "input" || r.type === "discrete") {
+      envCount++;
+      const env = document.createElement("div");
+      env.className = "reg"; env.id = "env-" + k;
+      if (r.widget === "bitfield") {
+        env.innerHTML = `<div class="row"><label>Движение по зонам</label></div>` +
+          r.bits.map((b, i) =>
+            `<div class="row bitrow"><label>${b}</label>
+             <span class="toggle" data-bit="${i}"></span></div>`).join("") +
+          `<div class="who">${WHO_ENV[r.type]}</div>`;
+        env.querySelectorAll(".toggle").forEach(t =>
+          t.addEventListener("click", () => {
+            const cur = t.classList.contains("on");
+            postBit(dev.addr, r, +t.dataset.bit, cur ? 0 : 1);
+          }));
+      } else if (r.type === "input") {
+        env.innerHTML = `<div class="row"><label>${r.label} (в воздухе)</label></div>
+          <input type="range" min="${r.min}" max="${r.max}" step="any">
+          <div class="row"><span class="val"></span><span></span></div>
+          <div class="who">${WHO_ENV[r.type]}</div>`;
+        const s = env.querySelector("input");
+        s.addEventListener("pointerdown", () => editing.add(k));
+        s.addEventListener("pointerup", () => editing.delete(k));
+        s.addEventListener("input", () => {
+          showVal(env, s.value, r);
+          post(dev.addr, r, parseFloat(s.value));
+        });
+      } else {
+        env.innerHTML = `<div class="row"><label>${r.label} (задать)</label>
+          <span class="toggle"></span></div>
+          <div class="who">${WHO_ENV[r.type]}</div>`;
+        env.querySelector(".toggle").addEventListener("click", () => {
+          const cur = env.querySelector(".toggle").classList.contains("on");
+          post(dev.addr, r, cur ? 0 : 1);
+        });
+      }
+      envside.appendChild(env);
+    }
+  }
+  if (!envCount) envside.remove();   // среды нет — не показываем раздел
+  return card;
+}
+
+function updateReg(r) {
+  const k = key(r);
+  const el = document.getElementById("reg-" + k);
+  if (!el) return;
+  if (r.widget === "bitfield") {
+    el.querySelectorAll(".lamp.bit").forEach((l, i) =>
+      l.classList.toggle("on", !!(r.raw >> i & 1)));
+    el.querySelector(".raw").textContent =
+      "по шине: " + r.raw + " · 0b" + r.raw.toString(2).padStart(r.bits.length, "0");
+  } else if (r.widget === "slider") {
+    const pct = (r.value - r.min) / (r.max - r.min) * 100;
+    el.querySelector(".bar i").style.width = Math.max(0, Math.min(100, pct)) + "%";
+    showVal(el, r.value, r);
+    el.querySelector(".raw").textContent = "по шине: " + r.raw;
+  } else {
+    el.querySelector(".lamp").classList.toggle("on", !!r.value);
+    el.querySelector(".raw").textContent = "по шине: " + r.raw;
+  }
+  // ручка среды следует за истиной (если её сейчас не тянут)
+  const env = document.getElementById("env-" + k);
+  if (env && !editing.has(k)) {
+    if (r.widget === "bitfield") {
+      env.querySelectorAll(".toggle").forEach((t, i) =>
+        t.classList.toggle("on", !!(r.raw >> i & 1)));
+    } else if (r.type === "input") {
+      env.querySelector("input").value = r.value;
+      showVal(env, r.value, r);
+    } else {
+      env.querySelector(".toggle").classList.toggle("on", !!r.value);
+    }
+  }
+}
+
+function showVal(el, human, r) {
+  const v = parseFloat(human);
+  el.querySelector(".val").textContent =
+    (Number.isInteger(v) ? v : v.toFixed(1)) + " " + (r.unit || "");
+}
+
+function post(addr, r, value) {
+  fetch("/api/set", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ addr, kind: r.type, num: r.num, value })
+  });
+}
+
+function postBit(addr, r, bit, value) {
+  fetch("/api/set", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ addr, kind: r.type, num: r.num, bit, value })
+  });
+}
+
+refresh();
+setInterval(refresh, 500);
+</script>
+</body>
+</html>

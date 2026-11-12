@@ -1,0 +1,43 @@
+{
+  "devices": [
+    {
+      "addr": 1,
+      "name": "Вентилятор",
+      "image": "img/fan.svg",
+      "regs": [
+        { "type": "holding", "num": 0, "widget": "slider", "label": "Скорость", "unit": "%", "min": 0, "max": 100, "scale": 10, "init": 0 },
+        { "type": "coil",    "num": 0, "widget": "lamp",   "label": "Вентилятор 1 (тихий)" },
+        { "type": "coil",    "num": 1, "widget": "lamp",   "label": "Вентилятор 2 (сильный)" }
+      ]
+    },
+    {
+      "addr": 2,
+      "name": "Климат в комнате",
+      "image": "img/climate.svg",
+      "regs": [
+        { "type": "input",    "num": 0, "widget": "slider", "label": "Температура", "unit": "°C", "min": 0, "max": 50, "scale": 10, "init": 22.5 },
+        { "type": "input",    "num": 1, "widget": "slider", "label": "Влажность",   "unit": "%",  "min": 0, "max": 100, "scale": 10, "init": 45 },
+        { "type": "discrete", "num": 0, "widget": "toggle", "label": "Питание датчика", "init": 1 }
+      ]
+    },
+    {
+      "addr": 3,
+      "name": "Свет в ванной",
+      "image": "img/lamp.svg",
+      "regs": [
+        { "type": "coil",     "num": 0, "widget": "lamp",   "label": "Лампа" },
+        { "type": "holding",  "num": 0, "widget": "slider", "label": "Яркость", "unit": "%", "min": 0, "max": 100, "scale": 10 },
+        { "type": "discrete", "num": 0, "widget": "toggle", "label": "Протечка!" }
+      ]
+    },
+    {
+      "addr": 4,
+      "name": "Датчики присутствия",
+      "image": "img/pir.svg",
+      "regs": [
+        { "type": "input", "num": 0, "widget": "bitfield", "label": "Слово состояния",
+          "bits": ["Ванна", "Унитаз", "Стиралка", "Раковина"] }
+      ]
+    }
+  ]
+}
