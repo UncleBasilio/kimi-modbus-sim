@@ -35,8 +35,10 @@
       "name": "Датчики присутствия",
       "image": "img/pir.svg",
       "regs": [
-        { "type": "input", "num": 0, "widget": "bitfield", "label": "Слово состояния",
-          "bits": ["Ванна", "Унитаз", "Стиралка", "Раковина"] }
+        { "type": "discrete", "num": 0, "widget": "toggle", "label": "Ванна" },
+        { "type": "discrete", "num": 1, "widget": "toggle", "label": "Унитаз" },
+        { "type": "discrete", "num": 2, "widget": "toggle", "label": "Стиралка" },
+        { "type": "discrete", "num": 3, "widget": "toggle", "label": "Раковина" }
       ]
     }
   ]
